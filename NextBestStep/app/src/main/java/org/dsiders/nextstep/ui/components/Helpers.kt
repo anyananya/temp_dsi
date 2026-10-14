@@ -125,6 +125,7 @@ fun MentorCard(
     mentor: UserEntity?,
     headline: String,
     body: String,
+    /** True when a conversation is already open; the button then adds to it. */
     requestSent: Boolean,
     onMessage: () -> Unit,
     modifier: Modifier = Modifier,
@@ -155,13 +156,13 @@ fun MentorCard(
             }
             Spacer(Modifier.height(12.dp))
             SecondaryButton(
-                if (requestSent) "Message sent to ${firstName(mentor.fullName)}" else "Message ${firstName(mentor.fullName)}",
-                onMessage, icon = Icons.AutoMirrored.Filled.Chat, enabled = !requestSent,
+                if (requestSent) "Send ${firstName(mentor.fullName)} another message" else "Message ${firstName(mentor.fullName)}",
+                onMessage, icon = Icons.AutoMirrored.Filled.Chat,
             )
         } else {
             Text("No mentor is online right now. Your message will wait for the next one.", style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
             Spacer(Modifier.height(12.dp))
-            SecondaryButton(if (requestSent) "Request sent" else "Leave a message", onMessage, icon = Icons.AutoMirrored.Filled.Chat, enabled = !requestSent)
+            SecondaryButton(if (requestSent) "Add to your message" else "Leave a message", onMessage, icon = Icons.AutoMirrored.Filled.Chat)
         }
     }
 }

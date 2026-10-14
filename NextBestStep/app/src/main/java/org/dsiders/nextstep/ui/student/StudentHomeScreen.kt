@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.map
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import org.dsiders.nextstep.AppContainer
 import org.dsiders.nextstep.data.OpeningEntity
@@ -163,7 +164,7 @@ fun StudentHomeScreen(
             Text("Or start with one of these", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
             Spacer(Modifier.height(10.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                roles.take(3).forEach { role ->
+                roles.filter { it.reviewed }.take(3).forEach { role ->
                     val sentence = "I want to become a ${role.title.lowercase()}"
                     ChoiceChip(role.title, text == sentence, { text = sentence })
                 }
@@ -244,15 +245,37 @@ fun StudentHomeScreen(
             Spacer(Modifier.height(28.dp))
             SectionLabel(if (goal?.targetRoleId != null && relevant.any { it.roleId == goal?.targetRoleId }) "Openings for you" else "Openings from Barabari")
             Spacer(Modifier.height(10.dp))
+            val shown = relevant.take(4)
+            // Readiness and confidence for each opening's role, recomputed when answers change.
+            val fits by produceState(emptyMap<Long, GapResult>(), shown, statuses) {
+                value = shown.map { it.roleId }.distinct().associateWith { container.engine.analyseForRole(me.id, it) }
+            }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                relevant.take(4).forEach { OpeningCard(it, roles.firstOrNull { r -> r.id == it.roleId }?.title, onClick = { onOpening(it.id) }) }
+                shown.forEach {
+                    OpeningCard(it, roles.firstOrNull { r -> r.id == it.roleId }?.title, onClick = { onOpening(it.id) }, fit = fits[it.roleId])
+                }
             }
         }
     }
 }
 
+/** "50% ready · 80% sure", shown wherever an opening is listed. */
 @Composable
-fun OpeningCard(opening: OpeningEntity, roleTitle: String?, onClick: () -> Unit) {
+fun FitPills(fit: GapResult) {
+    val ready = (fit.readiness * 100).roundToInt()
+    val sure = (fit.assessmentConfidence * 100).roundToInt()
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Pill(
+            "$ready% ready",
+            background = if (fit.readiness >= 0.75f) Palette.GreenSoft else Palette.AmberSoft,
+            content = if (fit.readiness >= 0.75f) Palette.Green else Palette.AmberText,
+        )
+        Pill("$sure% sure", background = Palette.Lavender, content = Palette.Navy)
+    }
+}
+
+@Composable
+fun OpeningCard(opening: OpeningEntity, roleTitle: String?, onClick: () -> Unit, fit: GapResult? = null) {
     NsCard(onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -267,6 +290,7 @@ fun OpeningCard(opening: OpeningEntity, roleTitle: String?, onClick: () -> Unit)
                     Spacer(Modifier.height(4.dp))
                     Text("For: $it", style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
                 }
+                fit?.let { Spacer(Modifier.height(6.dp)); FitPills(it) }
             }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Palette.Navy)
         }

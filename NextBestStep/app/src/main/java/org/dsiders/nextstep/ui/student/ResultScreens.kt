@@ -145,6 +145,17 @@ fun StandingScreen(
                     )
                 }
             } else {
+                if (!g.role.reviewed) {
+                    NsCard(color = Palette.BannerAmber) {
+                        Text("Your goal is new to Barabari", style = MaterialTheme.typography.titleSmall, color = Palette.Navy)
+                        Text(
+                            "I drafted these steps for ${g.role.title.lowercase()}, but no one at Barabari has checked them yet. " +
+                                "Use them as a rough guide and ask a mentor to look.",
+                            style = MaterialTheme.typography.bodySmall, color = Palette.Text,
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                }
                 GroupHeader("You already have this", Palette.Green, g.have.size, Palette.GreenSoft, Palette.Green)
                 Spacer(Modifier.height(10.dp))
                 if (g.have.isEmpty()) Text("Nothing yet, and that's normal at the start.", style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted, modifier = Modifier.padding(start = 18.dp))

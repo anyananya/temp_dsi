@@ -40,6 +40,7 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
         var usedAi = false
         var readback = emptyList<String>()
         var role: RoleEntity? = null
+        var goalTitle = ""
         var resumeSummary = goal.resumeSummary
 
         try {
@@ -51,10 +52,12 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
             usedAi = true
             readback = reply.optJSONArray("understood").strings().take(3)
             role = reply.optLong("role_id", -1).let { id -> ctx.allRoles.firstOrNull { it.id == id } }
+            goalTitle = reply.optString("goal_title").trim().take(60)
             reply.optJSONArray("facts")?.objects()?.take(8)?.forEach { f ->
                 val label = f.optString("label").trim()
                 val value = f.optString("value").trim()
-                if (label.isNotEmpty() && value.isNotEmpty() && label.length < 40) repo.upsertFact(studentId, label, value, Source.STUDENT)
+                val profileField = label.lowercase().replace(Regex("[^a-z]"), "") in IGNORED_FACT_LABELS
+                if (label.isNotEmpty() && value.isNotEmpty() && label.length < 40 && !profileField) repo.upsertFact(studentId, label, value, Source.STUDENT)
             }
             reply.optJSONArray("evidence")?.objects()?.forEach { e ->
                 val req = reqById[e.optLong("requirement_id", -1)] ?: return@forEach
@@ -74,14 +77,24 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
         }
 
         if (!usedAi) {
-            role = matchRoleOffline(goal.goalText, ctx.allRoles)
+            role = matchRoleOffline(goal.goalText, ctx.allRoles.filter { it.reviewed })
             readback = listOf(offlineReadback(goal.goalText, role))
         }
         if (readback.isEmpty()) readback = listOf(offlineReadback(goal.goalText, role))
 
+        // A specific goal Barabari has no role for: reuse an earlier draft, or draft one now.
+        if (role == null && goalTitle.isNotEmpty()) {
+            role = ctx.allRoles.firstOrNull { it.title.equals(goalTitle, ignoreCase = true) }
+                ?: draftProvisionalRole(goalTitle, goal.goalText, studentId)
+            if (role?.reviewed == false) {
+                readback = readback + "This goal is new to Barabari, so I've drafted the steps. A mentor will check them."
+            }
+        }
+        role?.let { repo.inheritStatuses(studentId, it.id) }
+
         // Attaching a resume is itself proof that one exists.
         if (resume != null && !resume.isEmpty) {
-            rolesWithReqs.flatMap { it.second }.filter { it.isResume() }.forEach {
+            repo.roles().flatMap { repo.requirements(it.id) }.filter { it.isResume() }.forEach {
                 val existing = repo.status(studentId, it.id)
                 if (existing?.source != Source.CASEWORKER) {
                     repo.setStatus(studentId, it.id, ReqStatus.HAVE, 0.95f, "You attached your resume.", Source.RESUME)
@@ -100,13 +113,53 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
         return IntakeResult(readback, role, usedAi)
     }
 
-    private fun matchRoleOffline(text: String, roles: List<RoleEntity>): RoleEntity? {
+    /**
+     * Drafts a role for a goal Barabari hasn't defined yet, marked unreviewed. The student can
+     * carry on straight away, but every result offers a mentor until a caseworker reviews the
+     * role in the Jobs tab. Returns null if the model is unavailable.
+     */
+    private suspend fun draftProvisionalRole(title: String, goalText: String, studentId: Long): RoleEntity? = try {
+        val draft = draftRole(title, "A student wrote: \"$goalText\". Draft the path for exactly this goal.")
+        if (draft.requirements.none { it.priority == Priority.CORE }) null
+        else {
+            val niceTitle = title.replaceFirstChar { it.uppercase() }
+            val roleId = repo.saveRole(
+                RoleEntity(
+                    title = niceTitle, field = draft.field.ifBlank { niceTitle }, description = draft.description,
+                    keywords = draft.keywords, reviewed = false, draftedForStudentId = studentId,
+                )
+            )
+            saveDraftRequirements(roleId, draft.requirements)
+            repo.role(roleId)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't draft a role for '$title': ${e.message}")
+        null
+    }
+
+    /** Saves drafted steps in order and links prerequisites by name. */
+    suspend fun saveDraftRequirements(roleId: Long, drafts: List<DraftRequirement>) {
+        val idByName = mutableMapOf<String, Long>()
+        drafts.forEachIndexed { i, d ->
+            val id = repo.saveRequirement(
+                RequirementEntity(
+                    roleId = roleId, name = d.name, kind = d.kind, priority = d.priority, orderIndex = i,
+                    whyNeeded = d.why, timeEstimate = d.time, whatYouNeed = d.need.joinToString("\n"), howTo = d.how,
+                    dependsOn = d.dependsOnNames.mapNotNull { idByName[it.lowercase()] }.joinToString(","),
+                )
+            )
+            idByName[d.name.lowercase()] = id
+        }
+    }
+
+    private fun matchRoleOffline(text: String, roles: List<RoleEntity>): RoleEntity? =
+        roles.map { it to keywordHits(text, it) }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
+
+    private fun keywordHits(text: String, role: RoleEntity): Int {
         val words = text.lowercase()
-        return roles.map { role ->
-            val keys = (role.keywords.split(',') + role.title.lowercase().split(' '))
-                .map { it.trim().lowercase() }.filter { it.length > 2 }
-            role to keys.count { Regex("\\b${Regex.escape(it)}").containsMatchIn(words) }
-        }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
+        val keys = (role.keywords.split(',') + role.title.lowercase().split(' '))
+            .map { it.trim().lowercase() }.filter { it.length > 2 }
+        return keys.count { Regex("\\b${Regex.escape(it)}").containsMatchIn(words) }
     }
 
     private fun offlineReadback(text: String, role: RoleEntity?): String {
@@ -135,13 +188,24 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
             return NextQuestion.Ask(q)
         }
 
-        val candidates = QuestionPicker.rank(ctx).filter { it.gain >= QuestionPicker.GAIN_THRESHOLD }
-        val top = candidates.firstOrNull() ?: return finish(ctx)
-        val estimate = (answered + candidates.size).coerceIn(answered + 1, MAX_QUESTIONS)
-        val q = requirementQuestion(ctx, top.req, top.reason, answered + 1, estimate)
-        questionCache[studentId] = ctx.signature to q
+        val ranked = QuestionPicker.rank(ctx)
+        val worthAsking = ranked.filter { it.gain >= QuestionPicker.GAIN_THRESHOLD }
+        if (worthAsking.isEmpty()) return finish(ctx)
+        // The scoring decides *whether* to keep asking; the model may pick among the top few
+        // to suit this student, and flag ones they've already answered in their own words.
+        val shortlist = ranked.take(CANDIDATES_FOR_AI)
+        val estimate = (answered + worthAsking.size).coerceIn(answered + 1, MAX_QUESTIONS)
+        val (q, covered) = requirementQuestion(ctx, shortlist, answered + 1, estimate)
+        if (covered.isNotEmpty()) {
+            covered.forEach { c -> repo.setStatus(studentId, c.reqId, c.status, COVERED_CONFIDENCE, c.evidence, Source.STUDENT) }
+            questionCache[studentId] = repo.context(studentId).signature to q
+        } else {
+            questionCache[studentId] = ctx.signature to q
+        }
         return NextQuestion.Ask(q)
     }
+
+    private data class Covered(val reqId: Long, val status: ReqStatus, val evidence: String)
 
     private suspend fun finish(ctx: StudentContext): NextQuestion {
         ctx.goal?.let { if (!it.intakeDone) repo.saveGoal(it.copy(intakeDone = true)) }
@@ -149,35 +213,63 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
     }
 
     private suspend fun fieldQuestion(ctx: StudentContext): Question {
-        val fields = ctx.allRoles.map { it.field }.filter { it.isNotBlank() }.distinct().take(4)
-        val options = fields.map { AnswerOption(label = it, field = it, confidence = 1f) } +
-            AnswerOption(label = "Something else", freeText = true)
+        val byField = ctx.allRoles.filter { it.reviewed && it.field.isNotBlank() }.groupBy { it.field }
         val dontKnow = AnswerOption(label = "I don't know yet", status = ReqStatus.UNKNOWN, confidence = 0f, dontKnow = true)
         val estimate = 4
+        fun build(order: List<String>, best: String?, text: String, helper: String, why: String, personalised: Boolean): Question {
+            val shown = order.take(MAX_FIELD_BUTTONS)
+            val options = shown.map { AnswerOption(label = it, field = it, confidence = 1f, suggested = it == best) } +
+                AnswerOption(label = "Something else", freeText = true)
+            return Question(FIELD_KEY, text, helper, "", why, options, dontKnow, 1, estimate, personalised)
+        }
+        // Offline: order fields by how many of their roles' keywords appear in the goal.
+        val goalText = ctx.goal?.goalText.orEmpty()
+        val scores = byField.mapValues { (_, roles) -> roles.sumOf { keywordHits(goalText, it) } }
+        val offlineOrder = byField.keys.sortedByDescending { scores[it] ?: 0 }
+        val offlineBest = offlineOrder.firstOrNull()?.takeIf { (scores[it] ?: 0) > 0 }
         return try {
-            val r = ai.json(Prompts.fieldQuestionSystem(ctx.student.language), Prompts.fieldQuestionUser(ctx, fields))
-            Question(
-                attributeKey = FIELD_KEY,
-                text = r.optString("question").ifBlank { "What kind of work are you picturing?" },
-                helper = r.optString("helper").ifBlank { "Pick whatever is closest. You don't need the exact job title." },
-                banner = "",
-                whyAsking = r.optString("why_asking").ifBlank { FIELD_WHY },
-                options = options, dontKnowOption = dontKnow, number = 1, estimatedTotal = estimate, personalised = true,
+            val r = ai.json(
+                Prompts.fieldQuestionSystem(ctx.student.language),
+                Prompts.fieldQuestionUser(ctx, byField.map { (f, roles) -> f to roles.map { it.title } }),
+            )
+            // Keep only real buttons, in the model's order, then any it left out.
+            val aiOrder = r.optJSONArray("order").strings().mapNotNull { name -> byField.keys.firstOrNull { it.equals(name, true) } }.distinct()
+            val order = aiOrder + byField.keys.filter { it !in aiOrder }
+            val best = r.optString("best_match").let { name -> byField.keys.firstOrNull { it.equals(name.trim(), true) } }
+            build(
+                order, best,
+                r.optString("question").ifBlank { "What kind of work are you picturing?" },
+                r.optString("helper").ifBlank { "Pick whatever is closest. You don't need the exact job title." },
+                r.optString("why_asking").ifBlank { FIELD_WHY }, true,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Field question offline: ${e.message}")
-            Question(
-                FIELD_KEY, "What kind of work are you picturing?",
-                "Pick whatever is closest. You don't need the exact job title.", "", FIELD_WHY,
-                options, dontKnow, 1, estimate, false,
-            )
+            build(offlineOrder, offlineBest, "What kind of work are you picturing?",
+                "Pick whatever is closest. You don't need the exact job title.", FIELD_WHY, false)
         }
     }
 
-    private suspend fun requirementQuestion(ctx: StudentContext, req: RequirementEntity, reason: String, number: Int, estimate: Int): Question {
+    private suspend fun requirementQuestion(
+        ctx: StudentContext, shortlist: List<QuestionPicker.Candidate>, number: Int, estimate: Int,
+    ): Pair<Question, List<Covered>> {
         val previous = ctx.log.lastOrNull { !it.skipped }
+        val top = shortlist.first()
         return try {
-            val r = ai.json(Prompts.requirementQuestionSystem(ctx.student.language), Prompts.requirementQuestionUser(ctx, req, reason))
+            val r = ai.json(
+                Prompts.requirementQuestionSystem(ctx.student.language),
+                Prompts.requirementQuestionUser(ctx, shortlist.map { it.req to it.reason }),
+            )
+            val chosen = shortlist.firstOrNull { it.req.id == r.optLong("ask_id", -1) } ?: top
+            val req = chosen.req
+            val reason = chosen.reason
+            val covered = r.optJSONArray("covered").objects().mapNotNull { c ->
+                val id = c.optLong("requirement_id", -1)
+                val status = c.optString("status").toStatus()
+                val evidence = c.optString("evidence").trim().take(160)
+                if (id == req.id || shortlist.none { it.req.id == id } || evidence.isEmpty()) return@mapNotNull null
+                if (status != ReqStatus.HAVE && status != ReqStatus.PARTIAL && status != ReqStatus.MISSING) return@mapNotNull null
+                Covered(id, status, evidence)
+            }
             val options = r.optJSONArray("options").objects().mapNotNull { o ->
                 val status = o.optString("status").toStatus() ?: return@mapNotNull null
                 if (status == ReqStatus.LATER) return@mapNotNull null
@@ -194,10 +286,10 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
                 banner = if (previous == null) "" else r.optString("banner"),
                 whyAsking = r.optString("why_asking").ifBlank { req.whyNeeded.ifBlank { reason } },
                 options = withNotSure, dontKnowOption = null, number = number, estimatedTotal = estimate, personalised = true,
-            )
+            ) to covered
         } catch (e: Exception) {
-            Log.w(TAG, "Question for ${req.name} offline: ${e.message}")
-            offlineRequirementQuestion(ctx, req, reason, number, estimate)
+            Log.w(TAG, "Question for ${top.req.name} offline: ${e.message}")
+            offlineRequirementQuestion(ctx, top.req, top.reason, number, estimate) to emptyList()
         }
     }
 
@@ -243,13 +335,13 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
                 option.dontKnow -> Unit
                 option.freeText -> {
                     field = freeText.trim()
-                    role = matchRoleOffline(freeText, ctx.allRoles)
+                    role = matchRoleOffline(freeText, ctx.allRoles.filter { it.reviewed })
                 }
                 else -> {
                     field = option.field.orEmpty()
                     // Keep the role the intake found if it is in this field.
                     role = ctx.allRoles.firstOrNull { it.id == goal.targetRoleId && it.field == field }
-                        ?: ctx.allRoles.firstOrNull { it.field == field }
+                        ?: ctx.allRoles.firstOrNull { it.reviewed && it.field == field }
                 }
             }
             repo.log(
@@ -369,6 +461,13 @@ class NextStepEngine(private val repo: Repository, private val ai: OpenAiClient)
         private const val TAG = "NextStepEngine"
         const val FIELD_KEY = "field"
         const val MAX_QUESTIONS = 6
+        /** How many top-ranked requirements the model may choose between. */
+        private const val CANDIDATES_FOR_AI = 3
+        private const val MAX_FIELD_BUTTONS = 4
+        /** Inferred from the student's own words rather than a direct question, so not fully settled. */
+        private const val COVERED_CONFIDENCE = 0.75f
+        /** Already on the profile or the goal; the model sometimes repeats them as "facts". */
+        private val IGNORED_FACT_LABELS = setOf("name", "firstname", "fullname", "language", "preferredlanguage", "goal", "aim", "aspiration")
         private const val FIELD_WHY = "Nothing else can be judged until we know the kind of work you want. " +
             "It's fine to say you don't know yet; a mentor can help you choose."
     }

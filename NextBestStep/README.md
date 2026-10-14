@@ -20,6 +20,13 @@ The UI follows the Figma prototype in *Assignment 11, Final UI Design Document* 
    OPENAI_MODEL=gpt-4.1-mini
    ```
    See `local.properties.example`. The key is compiled into the app at build time, so **rebuild after changing it**.
+
+   Any OpenAI-compatible provider works. For Groq, also set:
+   ```properties
+   OPENAI_MODEL=openai/gpt-oss-120b
+   OPENAI_BASE_URL=https://api.groq.com/openai/v1
+   ```
+   (`LLM_API_KEY`, `LLM_MODEL` and `LLM_BASE_URL` are accepted as alternative names.)
 3. Run on a phone or emulator (Android 8.0 / API 26 or newer).
 
 Without a key the app still works: it falls back to standard template questions and keyword matching.
@@ -78,6 +85,12 @@ It follows the four services from the Sprint 1 design document (`app/src/main/ja
 | **S2 Question picker**: ranks unknowns by how much they'd change the next step, stops when gain is below threshold | `QuestionPicker` | No. Only the **wording** is personalised by OpenAI |
 | **S3 Gap reasoner**: compares the student with the role's requirement graph and finds the nearest reachable step | `GapReasoner.analyse` | **No, deterministic** |
 | **S4 Confidence gate**: below 70 % confidence, or after "I don't know", offers a named mentor | `GapReasoner.analyse` | No |
+
+**Goals Barabari hasn't defined yet** (e.g. "ML engineer"): the model drafts a path for exactly that goal and saves it as an **unreviewed** role. The student is questioned on it straight away, but confidence is capped at 60 %, so a mentor is always offered. The role appears in the Jobs tab marked *Needs review* until a caseworker checks it and switches on *Reviewed*. Unreviewed roles are never offered to other students in the first question.
+
+**Openings** show two numbers: how ready the student is (share of the role's core steps they have) and how sure the app is about that (lower when steps haven't been asked about yet, or the role is unreviewed).
+
+**Help conversations** are threads: students can keep writing until a caseworker marks the conversation sorted.
 
 **Division of labour:** the language model turns text into fields and phrases questions in the student's language (English, Telugu or Hindi). It never decides what a student is missing. Every gap comes from a check against the requirement graph the NGO maintains. All prompts are in `ai/Prompts.kt`.
 

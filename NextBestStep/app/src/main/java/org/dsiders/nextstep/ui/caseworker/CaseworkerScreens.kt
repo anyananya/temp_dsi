@@ -94,6 +94,7 @@ import org.dsiders.nextstep.ui.components.Dot
 import org.dsiders.nextstep.ui.components.EmptyState
 import org.dsiders.nextstep.ui.components.FieldInput
 import org.dsiders.nextstep.ui.components.LoadingBlock
+import org.dsiders.nextstep.ui.components.MessageThread
 import org.dsiders.nextstep.ui.components.NsCard
 import org.dsiders.nextstep.ui.components.Pill
 import org.dsiders.nextstep.ui.components.PrimaryButton
@@ -150,6 +151,7 @@ class StudentsViewModel(private val c: AppContainer) : ViewModel() {
                     req != null -> req.reason to Palette.AmberText
                     goal == null -> "Hasn't set a goal yet" to Palette.Grey
                     role == null -> "Needs help choosing a direction" to Palette.Grey
+                    !role.reviewed -> "New goal, path needs review: ${role.title}" to Palette.AmberText
                     gap.readyForRole -> "Ready to apply" to Palette.Green
                     latest?.status == ReqStatus.HAVE && latestReq != null -> "Finished: ${latestReq.requirement.name.lowercase().removePrefix("a ").removePrefix("the ")}" to Palette.Green
                     gap.nextStep != null && latestReq?.status == ReqStatus.PARTIAL -> "On track, ${latestReq.requirement.stepTitle().replaceFirstChar { it.lowercase() }}" to Palette.Green
@@ -398,8 +400,9 @@ fun StudentDetailScreen(
                 AccentCard(Palette.Orange, color = Palette.OrangeSoft.copy(alpha = 0.6f)) {
                     SectionLabel("Asked for help · ${timeAgo(r.createdAt)}", color = Palette.OrangeDeep)
                     Text(r.reason, style = MaterialTheme.typography.titleSmall, color = Palette.Navy)
-                    if (r.message.isNotBlank()) Text("“${r.message}”", style = MaterialTheme.typography.bodyMedium)
-                    if (r.reply.isNotBlank()) Text("You replied: ${r.reply}", style = MaterialTheme.typography.bodySmall, color = Palette.Green)
+                    Spacer(Modifier.height(8.dp))
+                    val thread by remember(r.id) { container.repo.observeMessages(r.id) }.collectAsState(initial = emptyList())
+                    MessageThread(thread, viewerIsStudent = false, otherName = firstName(s.fullName))
                     Spacer(Modifier.height(8.dp))
                     FieldInput(reply, { reply = it }, "Reply to ${firstName(s.fullName)}", singleLine = false)
                     Spacer(Modifier.height(8.dp))

@@ -17,6 +17,8 @@ object GapReasoner {
     private const val UNASKED_CONFIDENCE = 0.3f
     /** A status this unsure is treated as not yet known. */
     const val SETTLED_CONFIDENCE = 0.6f
+    /** An AI-drafted role nobody at Barabari has checked can never look more certain than this. */
+    const val UNREVIEWED_CONFIDENCE_CAP = 0.6f
 
     fun analyse(ctx: StudentContext): GapResult {
         val role = ctx.role
@@ -82,9 +84,12 @@ object GapReasoner {
             }
         }.average().toFloat()
 
+        val reviewed = role.reviewed
+        val gateConfidence = if (reviewed) confidence else minOf(confidence, UNREVIEWED_CONFIDENCE_CAP)
         val lowConfidenceItem = missing.firstOrNull { it.confidence < SETTLED_CONFIDENCE }
-        val needsHandover = confidence < CONFIDENCE_THRESHOLD || ctx.saidDontKnow
+        val needsHandover = gateConfidence < CONFIDENCE_THRESHOLD || ctx.saidDontKnow
         val reason = when {
+            !reviewed -> "New goal, path not reviewed: ${role.title}"
             ctx.saidDontKnow && nextStep == null -> "Asked to talk to someone"
             confidence < CONFIDENCE_THRESHOLD && lowConfidenceItem != null -> "Not sure about: ${lowConfidenceItem.requirement.name.lowercase()}"
             nextStep != null -> "Stuck: ${stuckPhrase(nextStep.name)}"
@@ -93,7 +98,7 @@ object GapReasoner {
 
         return GapResult(
             role = role, have = have, missing = missing, later = later, nextStep = nextStep, path = path,
-            confidence = confidence, needsHandover = needsHandover, handoverReason = reason,
+            confidence = gateConfidence, needsHandover = needsHandover, handoverReason = reason,
             questionsAsked = ctx.questionsAnswered,
         )
     }

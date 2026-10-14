@@ -96,13 +96,14 @@ fun JobsScreen(container: AppContainer, onRole: (Long) -> Unit, onOpening: (Long
             )
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChoiceChip("Roles (${roles.size})", tab == 0, { tab = 0 })
+            val toReview = roles.count { !it.reviewed }
+            ChoiceChip(if (toReview > 0) "Roles (${roles.size}) · $toReview to review" else "Roles (${roles.size})", tab == 0, { tab = 0 })
             ChoiceChip("Openings (${openings.size})", tab == 1, { tab = 1 })
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (tab == 0) {
                 if (roles.isEmpty()) EmptyState("No roles yet", "Add the first role students can aim for.")
-                roles.forEach { r ->
+                roles.sortedBy { it.reviewed }.forEach { r ->
                     val (core, later) = reqCounts.value[r.id] ?: (0 to 0)
                     NsCard(onClick = { onRole(r.id) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -111,6 +112,7 @@ fun JobsScreen(container: AppContainer, onRole: (Long) -> Unit, onOpening: (Long
                                 Text(r.field, style = MaterialTheme.typography.bodySmall, color = Palette.Text)
                                 Spacer(Modifier.height(6.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (!r.reviewed) Pill("Needs review", background = Palette.AmberSoft, content = Palette.AmberText)
                                     Pill("$core steps")
                                     if (later > 0) Pill("$later for later", background = Palette.GreySoft, content = Palette.TextMuted)
                                     val n = openings.count { it.roleId == r.id && it.active }
@@ -180,6 +182,7 @@ fun RoleEditorScreen(container: AppContainer, me: UserEntity, roleId: Long, onDo
     var field by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var keywords by rememberSaveable { mutableStateOf("") }
+    var reviewed by rememberSaveable { mutableStateOf(true) }
     val drafts = remember { mutableStateListOf<ReqDraft>() }
     var nextTempKey by remember { mutableStateOf(-1L) }
     var editing by remember { mutableStateOf<ReqDraft?>(null) }
@@ -195,6 +198,7 @@ fun RoleEditorScreen(container: AppContainer, me: UserEntity, roleId: Long, onDo
             original = role
             if (role != null) {
                 title = role.title; field = role.field; description = role.description; keywords = role.keywords
+                reviewed = role.reviewed
                 drafts.clear()
                 container.repo.requirements(roleId).forEach { r ->
                     drafts += ReqDraft(r.id, r.name, r.actionTitle, r.kind, r.priority, r.whyNeeded, r.timeEstimate, r.whatYouNeed,
@@ -212,6 +216,17 @@ fun RoleEditorScreen(container: AppContainer, me: UserEntity, roleId: Long, onDo
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).imePadding()) {
             BackRow(onDone, title = if (roleId == 0L) "New role" else "Edit role") {
                 if (roleId != 0L) IconButton({ confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete role", tint = Palette.AmberText) }
+            }
+            if (original?.reviewed == false) {
+                NsCard(color = Palette.AmberSoft) {
+                    Text("Drafted by AI for a student's goal", style = MaterialTheme.typography.titleSmall, color = Palette.AmberText)
+                    Text(
+                        "No one at Barabari has checked this yet, so students aiming for it are always offered a mentor. " +
+                            "Check each step, add your centre's places and times, then switch on Reviewed.",
+                        style = MaterialTheme.typography.bodySmall, color = Palette.Text,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
             }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 FieldInput(title, { title = it }, "Role title, e.g. Data analyst")
@@ -301,13 +316,25 @@ fun RoleEditorScreen(container: AppContainer, me: UserEntity, roleId: Long, onDo
             Spacer(Modifier.height(6.dp))
             TextLink("+ Add a step", { editing = ReqDraft(newKey()) })
             Spacer(Modifier.height(16.dp))
+            NsCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Reviewed by Barabari", style = MaterialTheme.typography.titleSmall, color = Palette.Navy)
+                        Text("Only reviewed roles are offered in the first question and give results without a mentor check.",
+                            style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
+                    }
+                    Switch(reviewed, { reviewed = it }, colors = SwitchDefaults.colors(checkedTrackColor = Palette.Green))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
         Box(Modifier.padding(16.dp)) {
             PrimaryButton("Save role", {
                 saving = true
                 scope.launch {
                     val base = original ?: RoleEntity(title = "", field = "", createdBy = me.id)
-                    val id = container.repo.saveRole(base.copy(title = title.trim(), field = field.trim(), description = description.trim(), keywords = keywords.trim()))
+                    val id = container.repo.saveRole(base.copy(title = title.trim(), field = field.trim(), description = description.trim(),
+                        keywords = keywords.trim(), reviewed = reviewed))
                     // First pass: save every step and learn the real ids of new ones.
                     val idByKey = mutableMapOf<Long, Long>()
                     drafts.forEachIndexed { i, d ->

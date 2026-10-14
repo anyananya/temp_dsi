@@ -134,15 +134,18 @@ fun TextLink(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, c
 
 /** Outlined answer button from frames 3 and 4. */
 @Composable
-fun AnswerRow(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, tinted: Boolean = false, enabled: Boolean = true) {
+fun AnswerRow(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, tinted: Boolean = false, enabled: Boolean = true, tag: String? = null) {
     Surface(
         modifier = modifier.fillMaxWidth().clip(ButtonShape).clickable(enabled = enabled, onClick = onClick),
         shape = ButtonShape, color = if (tinted) Palette.Lavender.copy(alpha = 0.7f) else Palette.Card,
-        border = if (tinted) null else BorderStroke(1.2.dp, Palette.Navy),
+        border = if (tinted) null else BorderStroke(if (tag != null) 2.dp else 1.2.dp, Palette.Navy),
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
             icon?.let { Icon(it, null, tint = Palette.Navy, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(12.dp)) }
-            Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = Palette.Navy)
+            Column(Modifier.weight(1f)) {
+                tag?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = Palette.OrangeDeep) }
+                Text(text, style = MaterialTheme.typography.bodyLarge, color = Palette.Navy)
+            }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Palette.Navy)
         }
     }

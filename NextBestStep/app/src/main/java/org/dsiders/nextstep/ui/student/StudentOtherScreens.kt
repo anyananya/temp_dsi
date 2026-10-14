@@ -67,6 +67,8 @@ import org.dsiders.nextstep.ui.components.FieldInput
 import org.dsiders.nextstep.ui.components.KeyValueRow
 import org.dsiders.nextstep.ui.components.LoadingBlock
 import org.dsiders.nextstep.ui.components.MentorCard
+import org.dsiders.nextstep.ui.components.MessageComposer
+import org.dsiders.nextstep.ui.components.MessageThread
 import org.dsiders.nextstep.ui.components.NsCard
 import org.dsiders.nextstep.ui.components.Pill
 import org.dsiders.nextstep.ui.components.PrimaryButton
@@ -77,7 +79,6 @@ import org.dsiders.nextstep.ui.components.Share
 import org.dsiders.nextstep.ui.components.TextLink
 import org.dsiders.nextstep.ui.components.firstName
 import org.dsiders.nextstep.ui.components.pickMentor
-import org.dsiders.nextstep.ui.components.timeAgo
 import org.dsiders.nextstep.ui.theme.Palette
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ fun StudentHelpScreen(container: AppContainer, me: UserEntity) {
     val context = LocalContext.current
     val caseworkers by remember { container.repo.observeCaseworkers() }.collectAsState(initial = emptyList())
     val requests by remember { container.repo.observeRequestsFor(me.id) }.collectAsState(initial = emptyList())
+    val messages by remember { container.repo.observeMessagesForStudent(me.id) }.collectAsState(initial = emptyList())
     val gap = rememberGap(container, me.id)
     var asking by remember { mutableStateOf(false) }
     val mentor = pickMentor(me, caseworkers, gap?.nextStep?.name)
@@ -101,7 +103,7 @@ fun StudentHelpScreen(container: AppContainer, me: UserEntity) {
         Spacer(Modifier.height(16.dp))
         MentorCard(
             mentor = mentor, headline = "Your mentor",
-            body = if (open) "Your message is with them. You'll see their reply below." else "Stuck, unsure, or just want a second opinion? Send a message.",
+            body = if (open) "Your conversation is below. You can keep writing until it's sorted." else "Stuck, unsure, or just want a second opinion? Send a message.",
             requestSent = open, onMessage = { asking = true },
         )
         if (mentor != null && mentor.phone.isNotBlank()) {
@@ -117,25 +119,24 @@ fun StudentHelpScreen(container: AppContainer, me: UserEntity) {
             Text("Nothing yet.", style = MaterialTheme.typography.bodyMedium, color = Palette.TextMuted)
         }
         requests.forEach { r ->
-            val name = caseworkers.firstOrNull { it.id == r.caseworkerId }?.fullName?.let { firstName(it) } ?: "a mentor"
+            val name = caseworkers.firstOrNull { it.id == r.caseworkerId }?.fullName?.let { firstName(it) } ?: "Mentor"
+            val thread = messages.filter { it.requestId == r.id }
             NsCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(r.reason, style = MaterialTheme.typography.titleSmall, color = Palette.Navy, modifier = Modifier.weight(1f))
-                    Text(timeAgo(r.createdAt), style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
-                }
-                if (r.message.isNotBlank()) Text("“${r.message}”", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
-                Spacer(Modifier.height(6.dp))
-                when (r.status) {
-                    RequestStatus.NEW -> Pill("Sent to $name", background = Palette.AmberSoft, content = Palette.AmberText)
-                    RequestStatus.SEEN -> Pill("$name has seen it", background = Palette.Lavender)
-                    RequestStatus.RESOLVED -> Pill("Sorted", background = Palette.GreenSoft, content = Palette.Green)
-                }
-                if (r.reply.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    AccentCard(Palette.Green, color = Palette.GreenSoft.copy(alpha = 0.5f)) {
-                        Text("$name replied", style = MaterialTheme.typography.labelMedium, color = Palette.Green)
-                        Text(r.reply, style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+                    when (r.status) {
+                        RequestStatus.NEW -> Pill("Sent to $name", background = Palette.AmberSoft, content = Palette.AmberText)
+                        RequestStatus.SEEN -> Pill("$name has seen it", background = Palette.Lavender)
+                        RequestStatus.RESOLVED -> Pill("Sorted", background = Palette.GreenSoft, content = Palette.Green)
                     }
+                }
+                Spacer(Modifier.height(10.dp))
+                MessageThread(thread, viewerIsStudent = true, otherName = name)
+                if (r.status != RequestStatus.RESOLVED) {
+                    Spacer(Modifier.height(10.dp))
+                    MessageComposer("Write to $name", onSend = { text ->
+                        scope.launch { container.repo.askForHelp(me.id, r.caseworkerId ?: mentor?.id, r.reason, text) }
+                    })
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -455,12 +456,19 @@ fun OpeningDetailScreen(container: AppContainer, me: UserEntity, openingId: Long
                 style = MaterialTheme.typography.titleMedium, color = Palette.Navy,
             )
             Spacer(Modifier.height(8.dp))
+            FitPills(r)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when {
+                    r.role?.reviewed == false -> "This path hasn't been checked by Barabari yet, so treat it as a rough guide."
+                    r.unknownCount > 0 -> "We're less sure because we haven't asked you about ${r.unknownCount} of these yet."
+                    else -> "Based on what you've told us."
+                },
+                style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted,
+            )
+            Spacer(Modifier.height(8.dp))
             r.have.forEach { Text("✓  ${it.requirement.name}", color = Palette.Green, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp)) }
             r.missing.forEach { Text("•  ${it.requirement.name}", color = Palette.AmberText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp)) }
-            if (r.missing.any { it.status == ReqStatus.UNKNOWN }) {
-                Spacer(Modifier.height(6.dp))
-                Text("Some of these we haven't asked you about yet.", style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
-            }
         }
         if (o.howToApply.isNotBlank()) {
             Spacer(Modifier.height(16.dp))

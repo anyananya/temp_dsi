@@ -49,6 +49,8 @@ data class AnswerOption(
     val dontKnow: Boolean = false,
     /** "Something else": the student types their own answer. */
     val freeText: Boolean = false,
+    /** Best fit for what the student wrote; shown with a "Closest to what you said" tag. */
+    val suggested: Boolean = false,
 )
 
 data class Question(
@@ -100,6 +102,25 @@ data class GapResult(
     val questionsAsked: Int,
 ) {
     val allItems: List<GapItem> get() = have + missing + later
+
+    /** Share of the role's core steps the student already has (0..1). */
+    val readiness: Float get() = (have.size + missing.size).let { if (it == 0) 0f else have.size.toFloat() / it }
+
+    /**
+     * How sure the app is about [readiness] (0..1): the average confidence across every core
+     * step, where a step nobody has asked about counts as a weak guess. Capped for roles
+     * Barabari hasn't reviewed yet.
+     */
+    val assessmentConfidence: Float
+        get() {
+            val items = have + missing
+            if (items.isEmpty()) return 0f
+            val avg = items.map { it.confidence }.average().toFloat()
+            return if (role?.reviewed == false) minOf(avg, GapReasoner.UNREVIEWED_CONFIDENCE_CAP) else avg
+        }
+
+    /** Core steps we have no answer for yet. */
+    val unknownCount: Int get() = missing.count { it.status == org.dsiders.nextstep.data.ReqStatus.UNKNOWN }
     val readyForRole: Boolean get() = role != null && nextStep == null && missing.isEmpty()
     val doneCount: Int get() = path.count { it.state == StepState.DONE }
 }

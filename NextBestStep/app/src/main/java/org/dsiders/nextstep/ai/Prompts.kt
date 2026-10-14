@@ -52,8 +52,12 @@ ${languageRule(language)}
 Return JSON:
 {
   "understood": [1 to 3 short sentences starting with "You", saying back what you understood, e.g. "You want to work with data"],
-  "role_id": id of the ONE role below that clearly matches their goal, or null if none clearly matches or they are unsure,
-  "facts": [{"label": short label like "Studying", "Used Excel", "Languages", "value": short value}] (only facts stated explicitly; max 8),
+  "role_id": id of the ONE role below that is the SAME job as their goal, or null. A related job is not the same
+             job (an ML engineer is not a data analyst; a nurse is not a doctor). null if they are unsure,
+  "goal_title": the specific job or role they named, as a short title (e.g. "ML engineer", "Bank clerk"),
+                even if it is not in the list; "" if they did not name a specific job,
+  "facts": [{"label": short label like "Studying", "Used Excel", "Languages", "value": short value}] (only facts about their
+            skills, studies or experience stated explicitly in what they wrote; never their name, language or goal; max 8),
   "evidence": [{"requirement_id": id from the list, "status": "HAVE" | "PARTIAL" | "MISSING",
                 "confidence": 0.0-0.95, "evidence": one short sentence to the student quoting what they said,
                 e.g. "You said you've used Excel in college."}] (only when the text clearly says so),
@@ -67,55 +71,78 @@ Return JSON:
         appendLine()
         appendLine("ROLES THE NGO SUPPORTS (id: title | kind of work | requirements as id=name):")
         roles.forEach { (role, reqs) ->
-            appendLine("${role.id}: ${role.title} | ${role.field} | " + reqs.joinToString(", ") { "${it.id}=${it.name}" })
+            val draft = if (role.reviewed) "" else " (draft)"
+            appendLine("${role.id}: ${role.title}$draft | ${role.field} | " + reqs.joinToString(", ") { "${it.id}=${it.name}" })
         }
     }
 
     // ---- S2 question wording ----------------------------------------------------
 
     fun fieldQuestionSystem(language: String) = """$HOUSE_RULES
-Your job: word the FIRST question the student sees, which asks what kind of work they picture.
-The answer buttons are fixed by the app; you only write the words around them.
+Your job: word the FIRST question the student sees, which asks what kind of work they picture,
+and put the answer buttons in the best order for THIS student. The buttons come from the NGO and
+must be copied exactly; you only choose their order and write the words around them.
+If what they wrote gives any hint (an interest, a subject, a place they want to work), refer to it
+in their own words. Do not claim more than they said.
 ${languageRule(language)}
 Return JSON:
 {
-  "question": the question, max 10 words, e.g. "What kind of work are you picturing?",
+  "question": max 14 words. If they gave a hint, mention it, e.g. "You said you like computers. Which of these is closest?"
+              Otherwise: "What kind of work are you picturing?",
   "helper": one reassuring sentence, e.g. "Pick whatever is closest. You don't need the exact job title.",
-  "why_asking": two short sentences on why this is asked first
+  "why_asking": two short sentences on why this is asked first,
+  "order": every button text from the list, copied exactly, best fit for this student first,
+  "best_match": the button text that clearly fits what they wrote, or "" if nothing clearly fits
 }"""
 
-    fun fieldQuestionUser(ctx: StudentContext, fields: List<String>) = buildString {
+    fun fieldQuestionUser(ctx: StudentContext, fields: List<Pair<String, List<String>>>) = buildString {
         appendLine(studentBlock(ctx))
-        appendLine("Answer buttons the app will show: ${fields.joinToString(" | ")} | Something else | I don't know yet")
+        appendLine()
+        appendLine("BUTTONS (button text | example roles in it):")
+        fields.forEach { (field, titles) -> appendLine("$field | ${titles.joinToString(", ")}") }
+        appendLine("The app always adds \"Something else\" and \"I don't know yet\" after these.")
     }
 
     fun requirementQuestionSystem(language: String) = """$HOUSE_RULES
-Your job: write ONE question that finds out whether the student already has a specific thing
-their goal needs. Make it personal: use their goal, course and earlier answers, but do not assume
-the answer. The app decides what to ask; you only decide how to ask it.
+Your job: pick what to ask this student next, from the CANDIDATES the app gives you, and write
+ONE question about it. Candidates are listed best-first by the app's own scoring. Ask the first
+one unless another clearly suits this student better (for example, it follows naturally from what
+they just said). Make the question personal: use their goal, course and earlier answers, but never
+assume the answer.
+Also say which candidates the student has ALREADY answered clearly in their own words (in what they
+wrote or in an earlier answer), so the app doesn't ask twice. Only include one if you can quote them.
 ${languageRule(language)}
 Return JSON:
 {
+  "ask_id": the id of the candidate you are asking about,
+  "covered": [{"requirement_id": id, "status": "HAVE" | "PARTIAL" | "MISSING",
+               "evidence": second-person sentence quoting them, e.g. "You said 'I made my resume last month'."}]
+             (usually empty; never include ask_id),
   "question": the question, max 12 words, e.g. "Do you have a resume?",
   "helper": one sentence that explains the thing simply and says it's fine if they don't have it,
-  "banner": one sentence linking this question to their previous answer, like
-            "You said data and numbers, so I'll ask about what you've already got." ("" if there is no previous answer),
+  "banner": one sentence linking this question to their MOST RECENT answer only (the last one in the list), like
+            "You said you've used Excel, so now I'll ask about your resume." Don't repeat an earlier answer.
+            ("" if there is no previous answer),
   "why_asking": two short sentences on why this matters for their goal,
   "options": 3 or 4 graded answers from strongest to weakest, each
      {"label": max 6 words in first person, e.g. "Yes, it's ready" / "I've started one" / "No, not yet" / "I'm not sure what counts",
       "status": "HAVE" | "PARTIAL" | "MISSING" | "UNKNOWN",
       "confidence": 0.0-1.0, how clearly this answer settles it,
-      "evidence": short sentence to show them later, e.g. "You said you've used Excel in college."}
+      "evidence": what picking THIS option tells us, in second person, based only on this option's label,
+                  e.g. for "I've used it a few times": "You said you've used spreadsheets a few times."}
      The last option must be a not-sure answer with status "UNKNOWN".
 }"""
 
-    fun requirementQuestionUser(ctx: StudentContext, req: RequirementEntity, reason: String) = buildString {
+    fun requirementQuestionUser(ctx: StudentContext, candidates: List<Pair<RequirementEntity, String>>) = buildString {
         appendLine(studentBlock(ctx))
         appendLine()
-        appendLine("THING TO ASK ABOUT: ${req.name} (${req.kind.name.lowercase()})")
-        if (req.whyNeeded.isNotBlank()) appendLine("Why the role needs it: ${req.whyNeeded}")
-        if (req.questionHint.isNotBlank()) appendLine("Note from the NGO: ${req.questionHint}")
-        appendLine("Why the app picked this question now: $reason")
+        appendLine("CANDIDATES (best first):")
+        candidates.forEach { (req, reason) ->
+            appendLine("- id ${req.id}: ${req.name} (${req.kind.name.lowercase()})")
+            if (req.whyNeeded.isNotBlank()) appendLine("  Why the role needs it: ${req.whyNeeded}")
+            if (req.questionHint.isNotBlank()) appendLine("  Note from the NGO: ${req.questionHint}")
+            appendLine("  Why the app would ask it now: $reason")
+        }
     }
 
     // ---- "Show me how" ----------------------------------------------------------

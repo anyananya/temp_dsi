@@ -218,3 +218,15 @@ interface ActivityDao {
     @Query("SELECT * FROM activity WHERE caseworkerId = :caseworkerId AND at >= :since")
     fun observeSince(caseworkerId: Long, since: Long): Flow<List<ActivityEntity>>
 }
+
+@Dao
+interface MessageDao {
+    @Insert
+    suspend fun insert(message: MessageEntity): Long
+
+    @Query("SELECT * FROM messages WHERE requestId = :requestId ORDER BY at, id")
+    fun observeForRequest(requestId: Long): Flow<List<MessageEntity>>
+
+    @Query("SELECT m.* FROM messages m JOIN help_requests r ON r.id = m.requestId WHERE r.studentId = :studentId ORDER BY m.at, m.id")
+    fun observeForStudent(studentId: Long): Flow<List<MessageEntity>>
+}

@@ -1,5 +1,6 @@
 package org.dsiders.nextstep.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -61,6 +62,13 @@ data class RoleEntity(
     val keywords: String = "",
     val createdBy: Long? = null,
     val updatedAt: Long = System.currentTimeMillis(),
+    /**
+     * False for a role the AI drafted because a student's goal wasn't on the list yet.
+     * Unreviewed roles always offer a mentor and wait in the Jobs tab for Barabari to check.
+     */
+    @ColumnInfo(defaultValue = "1") val reviewed: Boolean = true,
+    /** The student whose goal caused an unreviewed role to be drafted. */
+    val draftedForStudentId: Long? = null,
 )
 
 /**
@@ -194,6 +202,17 @@ data class NoteEntity(
     val caseworkerId: Long,
     val text: String,
     val createdAt: Long = System.currentTimeMillis(),
+)
+
+/** One message in a help conversation between a student and a caseworker. */
+@Entity(tableName = "messages", indices = [Index("requestId")])
+data class MessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val requestId: Long,
+    val senderId: Long?,
+    val fromStudent: Boolean,
+    val text: String,
+    val at: Long = System.currentTimeMillis(),
 )
 
 enum class ActivityType { STUDENT_SEEN, NEXT_STEP_SHARED, REPLIED }

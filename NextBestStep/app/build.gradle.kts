@@ -15,6 +15,10 @@ val localProps = Properties().apply {
 fun localProp(name: String, default: String = ""): String =
     (localProps.getProperty(name) ?: System.getenv(name) ?: default).trim()
 
+// Accepts either OPENAI_* or LLM_* names, so any OpenAI-compatible provider (e.g. Groq) works.
+fun llmProp(suffix: String, default: String = ""): String =
+    localProp("LLM_$suffix").ifEmpty { localProp("OPENAI_$suffix", default) }
+
 android {
     namespace = "org.dsiders.nextstep"
     compileSdk = 36
@@ -26,9 +30,9 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "OPENAI_API_KEY", "\"${localProp("OPENAI_API_KEY")}\"")
-        buildConfigField("String", "OPENAI_MODEL", "\"${localProp("OPENAI_MODEL", "gpt-4.1-mini")}\"")
-        buildConfigField("String", "OPENAI_BASE_URL", "\"${localProp("OPENAI_BASE_URL", "https://api.openai.com/v1")}\"")
+        buildConfigField("String", "OPENAI_API_KEY", "\"${llmProp("API_KEY")}\"")
+        buildConfigField("String", "OPENAI_MODEL", "\"${llmProp("MODEL", "gpt-4.1-mini")}\"")
+        buildConfigField("String", "OPENAI_BASE_URL", "\"${llmProp("BASE_URL", "https://api.openai.com/v1")}\"")
     }
 
     buildTypes {

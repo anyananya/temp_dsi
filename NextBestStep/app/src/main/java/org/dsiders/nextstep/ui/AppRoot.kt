@@ -153,6 +153,8 @@ private fun RoleScaffold(container: AppContainer, nav: NavHostController, me: Us
 
     val requests by remember { container.repo.observeRequests() }.collectAsState(initial = emptyList())
     val newRequests = requests.count { it.status == RequestStatus.NEW && (it.caseworkerId == null || it.caseworkerId == me.id) }
+    val roles by remember { container.repo.observeRoles() }.collectAsState(initial = emptyList())
+    val toReview = roles.count { !it.reviewed }
 
     val tabs = if (isStudent) listOf(
         Tab(Routes.S_HOME, "Home", Icons.Outlined.Home, Icons.Filled.Home),
@@ -193,8 +195,14 @@ private fun RoleScaffold(container: AppContainer, nav: NavHostController, me: Us
                             }
                         },
                         icon = {
-                            if (!isStudent && index == 1 && newRequests > 0) {
-                                BadgedBox(badge = { Badge(containerColor = Palette.Orange) { Text("$newRequests") } }) {
+                            val badge = when {
+                                isStudent -> 0
+                                index == 1 -> newRequests
+                                index == 2 -> toReview
+                                else -> 0
+                            }
+                            if (badge > 0) {
+                                BadgedBox(badge = { Badge(containerColor = Palette.Orange) { Text("$badge") } }) {
                                     Icon(if (isSel) tab.selectedIcon else tab.icon, null)
                                 }
                             } else Icon(if (isSel) tab.selectedIcon else tab.icon, null)

@@ -208,17 +208,19 @@ object SeedData {
         status(db, priya, sheets, ReqStatus.HAVE, 0.85f, "You said you've used Excel in college.", now - 2 * HOUR)
         status(db, priya, resume, ReqStatus.MISSING, 0.9f, "You said you don't have one yet.", now - 2 * HOUR)
         status(db, priya, sql, ReqStatus.MISSING, 0.5f, "You haven't mentioned SQL so far.", now - 2 * HOUR)
-        db.helpRequests().upsert(
+        val priyaReq = db.helpRequests().upsert(
             HelpRequestEntity(studentId = priya, caseworkerId = ravi, reason = "Stuck: no resume yet",
                 message = "I don't know how to start my resume.", createdAt = now - 2 * HOUR)
         )
+        db.messages().insert(MessageEntity(requestId = priyaReq, senderId = priya, fromStudent = true, text = "I don't know how to start my resume.", at = now - 2 * HOUR))
 
         val sana = db.users().insert(user(UserRole.STUDENT, "Sana Begum", "sana", course = "B.Com", year = "Final year", district = "Hyderabad"))
         goal(db, sana, "I don't know what I want to do after college", null, "", "You're not sure yet, and that's fine", now - 5 * HOUR, done = false)
-        db.helpRequests().upsert(
+        val sanaReq = db.helpRequests().upsert(
             HelpRequestEntity(studentId = sana, caseworkerId = ravi, reason = "Asked to talk to someone",
                 message = "Can someone help me choose?", createdAt = now - 5 * HOUR)
         )
+        db.messages().insert(MessageEntity(requestId = sanaReq, senderId = sana, fromStudent = true, text = "Can someone help me choose?", at = now - 5 * HOUR))
 
         val arjun = db.users().insert(user(UserRole.STUDENT, "Arjun Mehta", "arjun", course = "B.Sc Maths", year = "Final year", district = "Medchal"))
         goal(db, arjun, "I want to build websites", web, "Building websites or apps", "You want to build websites", now - DAY)

@@ -133,6 +133,24 @@ class Repository(val db: AppDatabase) {
         }
     }
 
+    /**
+     * Copies what we already know about a student onto a role's steps that have the same name
+     * (a resume is a resume), so switching or drafting a role doesn't re-ask known things.
+     */
+    suspend fun inheritStatuses(studentId: Long, roleId: Long) {
+        val known = db.reqStatus().forStudent(studentId)
+        if (known.isEmpty()) return
+        val allReqs = db.roles().all().flatMap { db.requirements().forRole(it.id) }.associateBy { it.id }
+        val byName = known.filter { it.status != ReqStatus.LATER }
+            .mapNotNull { st -> allReqs[st.requirementId]?.let { it.name.normalised() to st } }
+            .groupBy({ it.first }, { it.second }).mapValues { (_, list) -> list.maxBy { it.updatedAt } }
+        db.requirements().forRole(roleId).forEach { req ->
+            if (known.none { it.requirementId == req.id }) {
+                byName[req.name.normalised()]?.let { db.reqStatus().upsert(it.copy(requirementId = req.id)) }
+            }
+        }
+    }
+
     suspend fun restoreStatus(studentId: Long, reqId: Long, previous: ReqStatusEntity?) {
         if (previous == null) db.reqStatus().delete(studentId, reqId) else db.reqStatus().upsert(previous)
     }
@@ -195,11 +213,23 @@ class Repository(val db: AppDatabase) {
     fun observeRequestsFor(studentId: Long) = db.helpRequests().observeForStudent(studentId)
     suspend fun openRequest(studentId: Long) = db.helpRequests().openForStudent(studentId)
 
-    suspend fun askForHelp(studentId: Long, caseworkerId: Long?, reason: String, message: String): Long {
+    /**
+     * Sends a student's message. If they already have an open conversation it is added to
+     * it (and flagged new for the caseworker); otherwise a new request is opened.
+     */
+    suspend fun askForHelp(studentId: Long, caseworkerId: Long?, reason: String, message: String): Long = db.withTransaction {
+        val now = System.currentTimeMillis()
         val open = db.helpRequests().openForStudent(studentId)
-        val req = (open ?: HelpRequestEntity(studentId = studentId, caseworkerId = caseworkerId, reason = reason))
-            .copy(caseworkerId = caseworkerId, reason = reason, message = message.trim(), status = RequestStatus.NEW, createdAt = System.currentTimeMillis())
-        return db.helpRequests().upsert(req)
+        val text = message.trim()
+        val req = if (open != null) {
+            open.copy(caseworkerId = open.caseworkerId ?: caseworkerId, message = text.ifBlank { open.message },
+                status = RequestStatus.NEW, createdAt = now)
+        } else {
+            HelpRequestEntity(studentId = studentId, caseworkerId = caseworkerId, reason = reason, message = text, createdAt = now)
+        }
+        val id = db.helpRequests().upsert(req).let { if (req.id != 0L) req.id else it }
+        if (text.isNotEmpty()) db.messages().insert(MessageEntity(requestId = id, senderId = studentId, fromStudent = true, text = text, at = now))
+        id
     }
 
     suspend fun markRequestSeen(id: Long) {
@@ -209,14 +239,22 @@ class Repository(val db: AppDatabase) {
 
     suspend fun replyToRequest(id: Long, caseworkerId: Long, reply: String, resolve: Boolean) {
         val req = db.helpRequests().byId(id) ?: return
-        db.helpRequests().upsert(
-            req.copy(
-                reply = reply.trim().ifBlank { req.reply }, repliedAt = System.currentTimeMillis(), caseworkerId = caseworkerId,
-                status = if (resolve) RequestStatus.RESOLVED else RequestStatus.SEEN,
+        val text = reply.trim()
+        val now = System.currentTimeMillis()
+        db.withTransaction {
+            if (text.isNotEmpty()) db.messages().insert(MessageEntity(requestId = id, senderId = caseworkerId, fromStudent = false, text = text, at = now))
+            db.helpRequests().upsert(
+                req.copy(
+                    reply = text.ifBlank { req.reply }, repliedAt = if (text.isNotEmpty()) now else req.repliedAt, caseworkerId = caseworkerId,
+                    status = if (resolve) RequestStatus.RESOLVED else RequestStatus.SEEN,
+                )
             )
-        )
-        logActivity(caseworkerId, req.studentId, ActivityType.REPLIED)
+        }
+        if (text.isNotEmpty()) logActivity(caseworkerId, req.studentId, ActivityType.REPLIED)
     }
+
+    fun observeMessages(requestId: Long) = db.messages().observeForRequest(requestId)
+    fun observeMessagesForStudent(studentId: Long) = db.messages().observeForStudent(studentId)
 
     fun observeNotes(studentId: Long) = db.notes().observeForStudent(studentId)
     suspend fun addNote(studentId: Long, caseworkerId: Long, text: String) = db.notes().insert(NoteEntity(studentId = studentId, caseworkerId = caseworkerId, text = text.trim()))

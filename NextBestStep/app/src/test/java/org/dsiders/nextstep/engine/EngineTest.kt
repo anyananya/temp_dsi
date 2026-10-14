@@ -142,4 +142,29 @@ class EngineTest {
         assertEquals("Write your first resume", resume.copy(actionTitle = "Write your first resume").stepTitle())
         assertEquals("Build one small project", project.copy(kind = RequirementKind.ARTEFACT).stepTitle())
     }
+
+    @Test fun aiDraftedRoleAlwaysOffersAMentor() {
+        // Even with every answer clear, an unreviewed role never passes the gate on its own.
+        val gap = GapReasoner.analyse(
+            ctx(listOf(st(sheets, ReqStatus.HAVE, 1f), st(resume, ReqStatus.MISSING, 1f)), role = role.copy(reviewed = false))
+        )
+        assertTrue(gap.needsHandover)
+        assertTrue(gap.confidence <= GapReasoner.UNREVIEWED_CONFIDENCE_CAP)
+        assertTrue(gap.assessmentConfidence <= GapReasoner.UNREVIEWED_CONFIDENCE_CAP)
+        assertTrue(gap.handoverReason.startsWith("New goal"))
+    }
+
+    @Test fun readinessAndConfidenceForAnOpening() {
+        // 1 of 4 core steps done; two answered clearly (0.9), two never asked (0.3 each).
+        val gap = GapReasoner.analyse(ctx(listOf(st(sheets, ReqStatus.HAVE), st(resume, ReqStatus.MISSING))))
+        assertEquals(0.25f, gap.readiness, 0.001f)
+        assertEquals((0.9f + 0.9f + 0.3f + 0.3f) / 4, gap.assessmentConfidence, 0.001f)
+        assertEquals(2, gap.unknownCount)
+    }
+
+    @Test fun answeringMoreRaisesConfidence() {
+        val before = GapReasoner.analyse(ctx(listOf(st(sheets, ReqStatus.HAVE)))).assessmentConfidence
+        val after = GapReasoner.analyse(ctx(listOf(sheets, resume, sql, project).map { st(it, ReqStatus.MISSING) })).assessmentConfidence
+        assertTrue(after > before)
+    }
 }

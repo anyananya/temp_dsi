@@ -306,6 +306,7 @@ private fun QuestionBody(
                             isFieldQuestion -> iconForField(option.label)
                             else -> null
                         },
+                        tag = if (option.suggested) "Closest to what you said" else null,
                     )
                 }
                 q.dontKnowOption?.let { dk ->
