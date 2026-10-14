@@ -1,0 +1,11 @@
+# Local-only archive of earlier work (never pushed)
+old_files/
+
+# Android build output and local config (keys live in local.properties)
+NextBestStep/.gradle/
+NextBestStep/build/
+NextBestStep/app/build/
+NextBestStep/local.properties
+NextBestStep/.idea/
+*.iml
+.DS_Store

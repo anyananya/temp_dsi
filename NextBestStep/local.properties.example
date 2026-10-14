@@ -1,0 +1,14 @@
+## Copy this file to local.properties (Android Studio usually creates local.properties
+## with sdk.dir already set; just add the OPENAI lines to it).
+## local.properties is git-ignored, so your key never gets committed.
+
+sdk.dir=/path/to/Android/Sdk
+
+# Your OpenAI API key (https://platform.openai.com/api-keys)
+OPENAI_API_KEY=sk-...
+
+# Optional: which model to use. Any chat model that supports JSON mode works.
+OPENAI_MODEL=gpt-4.1-mini
+
+# Optional: change only if you route requests through your own proxy.
+OPENAI_BASE_URL=https://api.openai.com/v1
